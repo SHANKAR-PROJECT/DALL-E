@@ -1,11 +1,11 @@
 import puppeteer from "puppeteer";
 import { exec } from "child_process";
 import { promisify } from "util";
-import express from 'express';
+import express from "express";
 
 const app = express();
-app.set('json spaces', 2);
-const PORT = 8080;
+app.set("json spaces", 2);
+const PORT = process.env.PORT || 8080;
 
 class BingApi {
   constructor(options) {
@@ -15,18 +15,26 @@ class BingApi {
 
   async initialize() {
     if (!this.browser) {
-      const { stdout: chromiumPath } = await promisify(exec)("which chromium");
+      let executablePath;
+      try {
+        // Local system par chromium ho to use karo
+        const { stdout } = await promisify(exec)("which chromium");
+        executablePath = stdout.trim() || puppeteer.executablePath();
+      } catch (e) {
+        // Deploy server par puppeteer ka inbuilt chromium path use karo
+        executablePath = puppeteer.executablePath();
+      }
 
       this.browser = await puppeteer.launch({
         headless: true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
-        executablePath: chromiumPath.trim(),
+        executablePath
       });
     }
   }
 
   async setCookieAndReload(page) {
-    const cookie = { "name": "_U", "value": this.options.cookie };
+    const cookie = { name: "_U", value: this.options.cookie };
     await page.setCookie(cookie);
     await page.reload();
   }
@@ -48,9 +56,9 @@ class BingApi {
         await this.setCookieAndReload(page);
 
         try {
-          await page.waitForSelector("#bnp_btn_accept");
+          await page.waitForSelector("#bnp_btn_accept", { timeout: 5000 });
           await page.click("#bnp_btn_accept");
-        } catch (e) {
+        } catch {
           console.log("Accept button not found, continuing...");
         }
 
@@ -59,19 +67,14 @@ class BingApi {
         await page.keyboard.press("Enter");
 
         await page.waitForSelector(".imgpt", {
-          timeout: this.options.timeout || 1e3 * 60
+          timeout: this.options.timeout || 60_000
         });
 
-        const res = await page.$$eval(".imgpt", (imgs) => {
-          return imgs.map((img) => {
-            return img.querySelector("img")?.getAttribute("src");
-          });
-        });
+        const res = await page.$$eval(".imgpt", (imgs) =>
+          imgs.map((img) => img.querySelector("img")?.getAttribute("src"))
+        );
 
-        const urls = res.map((url) => {
-          return url?.split("?")[0];
-        });
-
+        const urls = res.map((url) => url?.split("?")[0]);
         await page.close();
         resolve({ urls });
       } catch (error) {
@@ -81,20 +84,18 @@ class BingApi {
   }
 
   async close() {
-    return new Promise(async (resolve) => {
-      if (this.browser) {
-        await this.browser.close();
-      }
-      resolve();
-    });
+    if (this.browser) {
+      await this.browser.close();
+    }
   }
 }
 
 const bing = new BingApi({
-  cookie: "1Oa-lvcQNooxB5xj9ZcNNVmYDFmZeF69zhc1847LPkW_5KFgqduVuGy9iz20S4CXlmVMNxweceKjB3tcQaKCgAAIKbriQcQ-_T-LUehblRlGS6mQIqDcP6hrUkUIpxIuPYl_ZeJNsao7mK1X98u1hiabvknrXuk61qejw830bvl3BVNHx46Q4ijkRbLYOiHwxTG5XMSkWjC0Wd_9IE32w3GqPA4zZe5jCC5Gi475aztg",
+  cookie:
+    "1Oa-lvcQNooxB5xj9ZcNNVmYDFmZeF69zhc1847LPkW_5KFgqduVuGy9iz20S4CXlmVMNxweceKjB3tcQaKCgAAIKbriQcQ-_T-LUehblRlGS6mQIqDcP6hrUkUIpxIuPYl_ZeJNsao7mK1X98u1hiabvknrXuk61qejw830bvl3BVNHx46Q4ijkRbLYOiHwxTG5XMSkWjC0Wd_9IE32w3GqPA4zZe5jCC5Gi475aztg"
 });
 
-app.get('/g', async (req, res) => {
+app.get("/g", async (req, res) => {
   const prompt = req.query.prompt;
 
   try {
@@ -103,16 +104,11 @@ app.get('/g', async (req, res) => {
     console.log(result.urls);
     res.json({ urls: result.urls });
   } catch (error) {
-    console.error('Error generating images:', error);
-    res.status(500).send('Internal Server Error');
+    console.error("Error generating images:", error);
+    res.status(500).send("Internal Server Error");
   }
 });
 
-app.listen(PORT, '0.0.0.0', async () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on port ${PORT}`);
-  try {
-    
-  } catch (error) {
-    console.error('An error occurred:', error);
-  }
 });
