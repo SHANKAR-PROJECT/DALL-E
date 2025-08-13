@@ -15,20 +15,22 @@ class BingApi {
 
   async initialize() {
     if (!this.browser) {
-      let executablePath;
+      let executablePath = null;
+
+      // Local me agar chromium hai to use karo
       try {
-        // Local system par chromium ho to use karo
         const { stdout } = await promisify(exec)("which chromium");
-        executablePath = stdout.trim() || puppeteer.executablePath();
-      } catch (e) {
-        // Deploy server par puppeteer ka inbuilt chromium path use karo
-        executablePath = puppeteer.executablePath();
+        if (stdout.trim()) {
+          executablePath = stdout.trim();
+        }
+      } catch {
+        // Ignore - agar chromium nahi hai to puppeteer ka apna use hoga
       }
 
       this.browser = await puppeteer.launch({
         headless: true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
-        executablePath
+        executablePath: executablePath || undefined // Local me chromium, deploy me puppeteer ka apna
       });
     }
   }
@@ -40,47 +42,42 @@ class BingApi {
   }
 
   async createImage(query) {
-    return new Promise(async (resolve, reject) => {
+    try {
+      await this.initialize();
+      if (!this.browser) throw new Error("Browser not launched");
+
+      const page = await this.browser.newPage();
+      await page.goto(`https://www.bing.com/images/create`, {
+        waitUntil: "networkidle2"
+      });
+
+      await this.setCookieAndReload(page);
+
       try {
-        await this.initialize();
-
-        if (!this.browser) {
-          reject("Browser not launched");
-          return;
-        }
-
-        const page = await this.browser.newPage();
-        await page.goto(`https://www.bing.com/images/create`, {
-          waitUntil: "networkidle2"
-        });
-        await this.setCookieAndReload(page);
-
-        try {
-          await page.waitForSelector("#bnp_btn_accept", { timeout: 5000 });
-          await page.click("#bnp_btn_accept");
-        } catch {
-          console.log("Accept button not found, continuing...");
-        }
-
-        await page.focus("#sb_form_q");
-        await page.keyboard.type(query);
-        await page.keyboard.press("Enter");
-
-        await page.waitForSelector(".imgpt", {
-          timeout: this.options.timeout || 60_000
-        });
-
-        const res = await page.$$eval(".imgpt", (imgs) =>
-          imgs.map((img) => img.querySelector("img")?.getAttribute("src"))
-        );
-
-        const urls = res.map((url) => url?.split("?")[0]);
-        await page.close();
-        resolve({ urls });
-      } catch (error) {
-        reject(error);
+        await page.waitForSelector("#bnp_btn_accept", { timeout: 5000 });
+        await page.click("#bnp_btn_accept");
+      } catch {
+        console.log("Accept button not found, continuing...");
       }
-    });
+
+      await page.focus("#sb_form_q");
+      await page.keyboard.type(query);
+      await page.keyboard.press("Enter");
+
+      await page.waitForSelector(".imgpt", {
+        timeout: this.options.timeout || 60_000
+      });
+
+      const res = await page.$$eval(".imgpt", (imgs) =>
+        imgs.map((img) => img.querySelector("img")?.getAttribute("src"))
+      );
+
+      const urls = res.map((url) => url?.split("?")[0]);
+      await page.close();
+      return { urls };
+    } catch (error) {
+      throw error;
+    }
   }
 
   async close() {
@@ -90,18 +87,21 @@ class BingApi {
   }
 }
 
+// Yaha cookie directly add ki hai
 const bing = new BingApi({
-  cookie:
-    "1Oa-lvcQNooxB5xj9ZcNNVmYDFmZeF69zhc1847LPkW_5KFgqduVuGy9iz20S4CXlmVMNxweceKjB3tcQaKCgAAIKbriQcQ-_T-LUehblRlGS6mQIqDcP6hrUkUIpxIuPYl_ZeJNsao7mK1X98u1hiabvknrXuk61qejw830bvl3BVNHx46Q4ijkRbLYOiHwxTG5XMSkWjC0Wd_9IE32w3GqPA4zZe5jCC5Gi475aztg"
+  cookie: "1Oa-lvcQNooxB5xj9ZcNNVmYDFmZeF69zhc1847LPkW_5KFgqduVuGy9iz20S4CXlmVMNxweceKjB3tcQaKCgAAIKbriQcQ-_T-LUehblRlGS6mQIqDcP6hrUkUIpxIuPYl_ZeJNsao7mK1X98u1hiabvknrXuk61qejw830bvl3BVNHx46Q4ijkRbLYOiHwxTG5XMSkWjC0Wd_9IE32w3GqPA4zZe5jCC5Gi475aztg",
+  timeout: 60000
 });
 
 app.get("/g", async (req, res) => {
   const prompt = req.query.prompt;
+  if (!prompt) {
+    return res.status(400).json({ error: "Missing prompt parameter" });
+  }
 
   try {
-    console.log(`sending a request to bing`);
+    console.log(`Sending request to Bing for: ${prompt}`);
     const result = await bing.createImage(prompt);
-    console.log(result.urls);
     res.json({ urls: result.urls });
   } catch (error) {
     console.error("Error generating images:", error);
